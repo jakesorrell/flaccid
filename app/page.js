@@ -14,7 +14,7 @@ const KEY = "flcd_cup_v4";
 const SHARED = true;
 const SETUP_PASSWORD = "FLACCID2026!";
 
-// Firebase store is imported from lib/firebase
+// Firebase store imported from ../lib/firebase
 
 const C = {
   paper: "#F3F1E9", panel: "#FFFFFF",
@@ -51,7 +51,7 @@ const mk = (a, b, time) => ({ id: uid(), a, b, time, scores: {} });
 
 function defaultState() {
   return {
-    meta: { title: "FLACCID", updatedAt: rev() },
+    meta: { title: "FLACCID", updatedAt: rev(), schemaVersion: 2 },
     teams: { A: { name: "Short Kings", color: "#233D6B" }, B: { name: "Tall Guys", color: "#B23A2E" } },
     players: {
       A: [
@@ -76,21 +76,24 @@ function defaultState() {
         mk(["brad", "jonathan"], ["jakes", "taylor"], "12:50 PM"), mk(["kevinm", "blake"], ["travis", "samc"], "1:00 PM"),
         mk(["ronb"], ["matts"], "1:10 PM"),
       ] },
-      { id: "r2", name: "Best Ball", sub: "Sat AM · 2v2", type: "bestball", tee: "White", points: 1, note: "Greg Sprink spectates this round.", matches: [
+      { id: "r2", name: "Best Ball", sub: "Sat AM · 2v2", type: "bestball", tee: "White", points: 1, note: "Jonah Jacobsen plays a quota match against his course-adjusted handicap.", matches: [
         mk(["tyler", "kevinm"], ["jakes", "keviny"], "8:30 AM"), mk(["brad", "jonathan"], ["jakei", "samc"], "8:40 AM"),
-        mk(["ryanm", "blake"], ["jonah", "taylor"], "8:50 AM"), mk(["ronb", "harris"], ["travis", "matts"], "9:00 AM"),
-        mk(["kaman", "brian"], ["andrew", "aaron"], "9:10 AM"),
+        mk(["ryanm", "blake"], ["aaron", "taylor"], "8:50 AM"), mk(["ronb", "harris"], ["travis", "matts"], "9:00 AM"),
+        mk(["kaman", "brian"], ["andrew", "gregs"], "9:10 AM"),
+        { id: "r2-quota-jonah", a: [], b: ["jonah"], time: "9:20 AM", scores: {}, quota: true },
       ] },
-      { id: "r3", name: "Scramble", sub: "Sat PM · 2v2", type: "scramble", tee: "Red", points: 1, note: "Jonah Jacobsen spectates this round.", matches: [
+      { id: "r3", name: "Scramble", sub: "Sat PM · 2v2", type: "scramble", tee: "Red", points: 1, note: "Jonah Jacobsen plays a quota match against his course-adjusted handicap.", matches: [
         mk(["tyler", "jonathan"], ["jakes", "jakei"], "1:30 PM"), mk(["kevinm", "brad"], ["taylor", "keviny"], "1:40 PM"),
         mk(["blake", "harris"], ["travis", "samc"], "1:50 PM"), mk(["kaman", "ronb"], ["andrew", "aaron"], "2:00 PM"),
         mk(["brian", "ryanm"], ["matts", "gregs"], "2:10 PM"),
+        { id: "r3-quota-jonah", a: [], b: ["jonah"], time: "2:20 PM", scores: {}, quota: true },
       ] },
-      { id: "r4", name: "Singles", sub: "Sun AM · 1v1", type: "singles", tee: "Blue", points: 2, note: "Jonah Jacobsen (Tall Guys) draws a bye.", matches: [
+      { id: "r4", name: "Singles", sub: "Sun AM · 1v1", type: "singles", tee: "Blue", points: 2, note: "Jonah Jacobsen plays a quota match against his course-adjusted handicap.", matches: [
         mk(["brian"], ["matts"], "8:30 AM"), mk(["jonathan"], ["travis"], "8:30 AM"), mk(["tyler"], ["andrew"], "8:40 AM"),
         mk(["brad"], ["gregs"], "8:40 AM"), mk(["ryanm"], ["taylor"], "8:50 AM"), mk(["ronb"], ["aaron"], "8:50 AM"),
         mk(["kaman"], ["jakei"], "9:00 AM"), mk(["kevinm"], ["samc"], "9:00 AM"), mk(["blake"], ["jakes"], "9:10 AM"),
         mk(["harris"], ["keviny"], "9:10 AM"),
+        { id: "r4-quota-jonah", a: [], b: ["jonah"], time: "9:20 AM", scores: {}, quota: true },
       ] },
     ],
   };
@@ -99,12 +102,48 @@ function defaultState() {
 
 function migrate(s) {
   let changed = false;
-  if (s.meta && (s.meta.title === "FLACCID Cup" || s.meta.title === "FLCD Cup")) { s.meta.title = "FLACCID"; changed = true; }
-  const r2 = (s.rounds || []).find((r) => r.id === "r2");
-  if (r2) { r2.matches.forEach((m) => { const n = m.b.length; m.b = m.b.filter((id) => id !== "gregs"); if (m.b.length !== n) changed = true; }); if (!r2.note) { r2.note = "Greg Sprink spectates this round."; changed = true; } }
-  const r3 = (s.rounds || []).find((r) => r.id === "r3");
-  if (r3) { r3.matches.forEach((m) => { const n = m.b.length; m.b = m.b.filter((id) => id !== "jonah"); if (m.b.length !== n) changed = true; }); if (!r3.note) { r3.note = "Jonah Jacobsen spectates this round."; changed = true; } }
-  (s.rounds || []).forEach((r) => { if (r.points == null) { r.points = r.id === "r4" ? 2 : 1; changed = true; } });
+  s.meta = s.meta || {};
+  const v = s.meta.schemaVersion || 0;
+
+  if (v < 1) {
+    // v1: rename to FLACCID
+    if (s.meta.title === "FLACCID Cup" || s.meta.title === "FLCD Cup") s.meta.title = "FLACCID";
+    // backfill round points
+    (s.rounds || []).forEach((r) => { if (r.points == null) r.points = r.id === "r4" ? 2 : 1; });
+    s.meta.schemaVersion = 1;
+    changed = true;
+  }
+
+  if (v < 2) {
+    // v2: updated pairings + Jonah quota matches in R2, R3, R4
+    const quotaNote = "Jonah Jacobsen plays a quota match against his course-adjusted handicap.";
+
+    const r2 = (s.rounds || []).find((r) => r.id === "r2");
+    if (r2) {
+      const m850 = r2.matches.find((m) => m.time === "8:50 AM" && !m.quota);
+      if (m850) m850.b = ["aaron", "taylor"];
+      const m910 = r2.matches.find((m) => m.time === "9:10 AM" && !m.quota);
+      if (m910) m910.b = ["andrew", "gregs"];
+      if (!r2.matches.some((m) => m.quota)) r2.matches.push({ id: "r2-quota-jonah", a: [], b: ["jonah"], time: "9:20 AM", scores: {}, quota: true });
+      r2.note = quotaNote;
+    }
+
+    const r3 = (s.rounds || []).find((r) => r.id === "r3");
+    if (r3) {
+      if (!r3.matches.some((m) => m.quota)) r3.matches.push({ id: "r3-quota-jonah", a: [], b: ["jonah"], time: "2:20 PM", scores: {}, quota: true });
+      r3.note = quotaNote;
+    }
+
+    const r4 = (s.rounds || []).find((r) => r.id === "r4");
+    if (r4) {
+      if (!r4.matches.some((m) => m.quota)) r4.matches.push({ id: "r4-quota-jonah", a: [], b: ["jonah"], time: "9:20 AM", scores: {}, quota: true });
+      r4.note = quotaNote;
+    }
+
+    s.meta.schemaVersion = 2;
+    changed = true;
+  }
+
   return changed;
 }
 
@@ -134,6 +173,40 @@ function matchEntities(state, round, m) {
   };
   return { a: build("a"), b: build("b") };
 }
+function courseHandicap(index, teeName) {
+  if (index == null) return 0;
+  const tee = COURSE.tees.find((t) => t.name === teeName);
+  if (!tee) return Math.round(index);
+  return Math.round(index * (tee.slope / 113) + (tee.rating - 72));
+}
+
+function computeQuotaMatch(state, round, m) {
+  const playerIds = m.a.length > 0 ? m.a : m.b;
+  const quotaSide = m.a.length > 0 ? "A" : "B";
+  if (playerIds.length === 0) return { isQuota: true, quotaSide, played: false, thru: 0, complete: false, over: false, result: null, remaining: 18 };
+  const player = findPlayer(state, playerIds[0]);
+  if (!player) return { isQuota: true, quotaSide, played: false, thru: 0, complete: false, over: false, result: null, remaining: 18 };
+  const idx = player.hcp == null ? 0 : player.hcp;
+  const cHcp = courseHandicap(idx, round.tee);
+  const target = 72 + cHcp;
+  const holeStrokes = SI.map((si) => strokesOnHole(cHcp, si));
+  const grossArr = (m.scores && m.scores[player.id]) ? m.scores[player.id] : Array(18).fill(null);
+  let grossSum = 0, parSum = 0, strokeSum = 0, holesPlayed = 0;
+  for (let h = 0; h < 18; h++) {
+    if (grossArr[h] != null) { grossSum += grossArr[h]; parSum += PAR[h]; strokeSum += holeStrokes[h]; holesPlayed++; }
+  }
+  const netSum = grossSum - strokeSum;
+  const complete = holesPlayed === 18;
+  const otherSide = quotaSide === "A" ? "B" : "A";
+  let result = null;
+  if (complete) {
+    if (netSum < 72) result = quotaSide;
+    else if (netSum > 72) result = otherSide;
+    else result = "H";
+  }
+  return { isQuota: true, quotaSide, otherSide, player, courseHcp: cHcp, target, holeStrokes, grossArr, grossSum, parSum, strokeSum, netSum, vsPar: netSum - parSum, thru: holesPlayed, played: holesPlayed > 0, complete, over: complete, remaining: 18 - holesPlayed, result };
+}
+
 function computeMatch(state, round, m, basis) {
   const ents = matchEntities(state, round, m);
   const all = [...ents.a, ...ents.b];
@@ -173,7 +246,7 @@ function computeMatch(state, round, m, basis) {
   { let acc = 0; for (let h = 9; h < 18; h++) { if (win[h] != null) { acc += win[h] === "A" ? 1 : win[h] === "B" ? -1 : 0; run[h] = carry + acc; } } }
   return { ents, A, B, win, run, front, back, carry, eff, thru, played, remaining, over, complete, result };
 }
-function matchScore(state, round, m, basis) { const cm = computeMatch(state, round, m, basis); const p = round.points || 1; if (cm.result === "A") return { a: p, b: 0 }; if (cm.result === "B") return { a: 0, b: p }; if (cm.result === "H") return { a: p / 2, b: p / 2 }; return { a: 0, b: 0 }; }
+function matchScore(state, round, m, basis) { const p = round.points || 1; const cm = m.quota ? computeQuotaMatch(state, round, m) : computeMatch(state, round, m, basis); if (cm.result === "A") return { a: p, b: 0 }; if (cm.result === "B") return { a: 0, b: p }; if (cm.result === "H") return { a: p / 2, b: p / 2 }; return { a: 0, b: 0 }; }
 function roundScore(state, round, basis) { return round.matches.reduce((acc, m) => { const s = matchScore(state, round, m, basis); acc.a += s.a; acc.b += s.b; return acc; }, { a: 0, b: 0 }); }
 function totals(state, basis) {
   let a = 0, b = 0, available = 0;
@@ -229,9 +302,9 @@ export default function Page() {
   useEffect(() => {
     mounted.current = true;
     (async () => {
-      let s = await store.get();
-      if (!s) { s = defaultState(); await store.set(s); }
-      else if (migrate(s)) { s.meta.updatedAt = rev(); await store.set(s); }
+      let s = await store.get(KEY);
+      if (!s) { s = defaultState(); await store.set(KEY, s); }
+      else if (migrate(s)) { s.meta.updatedAt = rev(); await store.set(KEY, s); }
       if (!mounted.current) return;
       revRef.current = s.meta.updatedAt; setState(s); setSynced(true);
     })();
@@ -239,13 +312,13 @@ export default function Page() {
   }, []);
   useEffect(() => {
     const id = setInterval(async () => {
-      if (editingRef.current) return; const s = await store.get(); if (!s || !mounted.current) return;
+      if (editingRef.current) return; const s = await store.get(KEY); if (!s || !mounted.current) return;
       if (s.meta.updatedAt !== revRef.current) { revRef.current = s.meta.updatedAt; setState(s); }
     }, 4000);
     return () => clearInterval(id);
   }, []);
   const commit = useCallback((updater) => {
-    setState((prev) => { const next = typeof updater === "function" ? updater(prev) : updater; next.meta = { ...next.meta, updatedAt: rev() }; revRef.current = next.meta.updatedAt; store.set(next); return next; });
+    setState((prev) => { const next = typeof updater === "function" ? updater(prev) : updater; next.meta = { ...next.meta, updatedAt: rev() }; revRef.current = next.meta.updatedAt; store.set(KEY, next); return next; });
   }, []);
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const t = useMemo(() => (state ? totals(state, basis) : null), [state]);
@@ -407,6 +480,7 @@ function StatusChip({ label, diff, teams }) {
 }
 
 function MatchCard({ state, round, m, idx, ri, basis, setScore, open, toggle, beginEdit, endEdit }) {
+  if (m.quota) return <QuotaMatchCard state={state} round={round} m={m} idx={idx} ri={ri} setScore={setScore} open={open} toggle={toggle} beginEdit={beginEdit} endEdit={endEdit} />;
   const A = state.teams.A, B = state.teams.B;
   const cm = useMemo(() => computeMatch(state, round, m, basis), [state, round, m, basis]);
   const ov = statusText(cm.eff, state.teams);
@@ -444,6 +518,133 @@ function MatchCard({ state, round, m, idx, ri, basis, setScore, open, toggle, be
       </button>
       {open && <Scorecard state={state} round={round} m={m} ri={ri} basis={basis} cm={cm} setScore={setScore} beginEdit={beginEdit} endEdit={endEdit} />}
     </Card>
+  );
+}
+
+function QuotaMatchCard({ state, round, m, idx, ri, setScore, open, toggle, beginEdit, endEdit }) {
+  const cm = useMemo(() => computeQuotaMatch(state, round, m), [state, round, m]);
+  if (!cm.player) {
+    return <Card style={{ padding: 14 }}><div style={{ fontSize: 13, color: C.inkSoft, textAlign: "center" }}>Quota match — no player assigned.</div></Card>;
+  }
+  const team = state.teams[cm.quotaSide];
+  const otherTeam = state.teams[cm.otherSide];
+  let statusLine, statusSub;
+  if (!cm.played) { statusLine = "Quota match"; statusSub = "· not yet started"; }
+  else if (cm.complete) {
+    if (cm.result === cm.quotaSide) { statusLine = `${cm.player.name.split(" ")[0]} wins by ${Math.abs(72 - cm.netSum)}`; statusSub = "· FINAL"; }
+    else if (cm.result === "H") { statusLine = "Even with handicap"; statusSub = "· HALVED · FINAL"; }
+    else { statusLine = `${cm.player.name.split(" ")[0]} loses by ${cm.netSum - 72}`; statusSub = "· FINAL"; }
+  } else {
+    const paceDiff = cm.netSum - cm.parSum;
+    if (paceDiff === 0) statusLine = "On pace";
+    else if (paceDiff < 0) statusLine = `${Math.abs(paceDiff)} under pace`;
+    else statusLine = `${paceDiff} over pace`;
+    statusSub = `· thru ${cm.thru}`;
+  }
+  let pillBg = "rgba(28,37,54,0.08)", pillCol = C.ink;
+  if (cm.complete) {
+    if (cm.result === cm.quotaSide) { pillBg = team.color; pillCol = "#fff"; }
+    else if (cm.result === cm.otherSide) { pillBg = otherTeam.color; pillCol = "#fff"; }
+  } else if (cm.played) {
+    const paceDiff = cm.netSum - cm.parSum;
+    if (paceDiff < 0) { pillBg = team.color; pillCol = "#fff"; }
+    else if (paceDiff > 0) { pillBg = otherTeam.color; pillCol = "#fff"; }
+  }
+  const points = round.points || 1;
+  const ptTxt = cm.complete
+    ? (cm.result === cm.quotaSide ? `${team.name.split(" ")[0]} +${points}` : cm.result === "H" ? `½ each` : `${otherTeam.name.split(" ")[0]} +${points}`)
+    : `${points} pt${points > 1 ? "s" : ""} · in play`;
+  const ptColor = cm.complete ? (cm.result === cm.quotaSide ? team.color : cm.result === cm.otherSide ? otherTeam.color : C.inkSoft) : C.inkSoft;
+  return (
+    <Card style={{ padding: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: C.red, textTransform: "uppercase" }}>Quota Match{m.time ? ` · ${m.time}` : ""}</span>
+        <span style={{ fontSize: 12.5, fontWeight: 800, color: ptColor }}>{ptTxt}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center", marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 7, alignItems: "flex-start" }}>
+          <Dot color={team.color} size={9} ring={C.panel} />
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.2 }}>{cm.player.name}<span style={{ color: C.inkSoft, fontWeight: 500 }}> · {fmt(cm.player.hcp)}</span></div>
+            <div style={{ fontSize: 11, color: C.inkSoft, marginTop: 3 }}>Course HCP {cm.courseHcp} · target {cm.target}</div>
+          </div>
+        </div>
+        <span style={{ fontFamily: SERIF, fontStyle: "italic", color: C.inkSoft, fontSize: 13 }}>vs</span>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.2 }}>His handicap</div>
+          <div style={{ fontSize: 11, color: C.inkSoft, marginTop: 3 }}>par 72 · net target</div>
+        </div>
+      </div>
+      <div style={{ textAlign: "center", marginBottom: 10 }}>
+        <span style={{ display: "inline-block", padding: "5px 14px", borderRadius: 999, background: pillBg, color: pillCol, fontWeight: 800, fontSize: 13 }}>
+          {statusLine} <span style={{ fontWeight: 600, opacity: 0.85 }}>{statusSub}</span>
+        </span>
+      </div>
+      <button onClick={toggle} style={{ width: "100%", padding: "10px 0", borderRadius: 8, border: `1px solid ${C.line}`, background: open ? "rgba(35,61,107,0.05)" : C.panel, color: C.navy, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>
+        {open ? "Hide scorecard ▲" : "Enter / view scorecard ▼"}
+      </button>
+      {open && <QuotaScorecard state={state} round={round} m={m} ri={ri} cm={cm} setScore={setScore} beginEdit={beginEdit} endEdit={endEdit} />}
+    </Card>
+  );
+}
+
+function QuotaScorecard({ state, round, m, ri, cm, setScore, beginEdit, endEdit }) {
+  const team = state.teams[cm.quotaSide];
+  const otherTeam = state.teams[cm.otherSide];
+  const FRONT = [0, 1, 2, 3, 4, 5, 6, 7, 8], BACK = [9, 10, 11, 12, 13, 14, 15, 16, 17];
+  const cellBase = { padding: "4px 3px", textAlign: "center", fontSize: 13, fontVariantNumeric: "tabular-nums", borderRight: `1px solid ${C.lineSoft}`, minWidth: 38 };
+  const sumCell = { ...cellBase, fontWeight: 800, background: "rgba(28,37,54,0.05)" };
+  const labelCell = { padding: "4px 10px", fontSize: 12, textAlign: "left", whiteSpace: "nowrap", borderRight: `1px solid ${C.lineSoft}`, position: "sticky", left: 0, background: C.panel, zIndex: 1 };
+  const toPar = (n) => (n === 0 ? "E" : n > 0 ? `+${n}` : `${n}`);
+  const ScoreTotal = ({ v, par }) => v == null ? "" : <span>{v} <span style={{ fontSize: 10.5, fontWeight: 700, color: v - par < 0 ? "#2E7D32" : C.inkSoft }}>({toPar(v - par)})</span></span>;
+  const arr = cm.grossArr;
+  let grossTot = null, netTot = null;
+  if (cm.played) { grossTot = cm.grossSum; netTot = cm.netSum; }
+  const HoleRow = ({ label, render, out, inn, tot, net, style, lstyle }) => (
+    <tr style={style}>
+      <td style={{ ...labelCell, ...lstyle }}>{label}</td>
+      {FRONT.map((h) => <td key={h} style={cellBase}>{render(h)}</td>)}
+      <td style={sumCell}>{out}</td>
+      {BACK.map((h) => <td key={h} style={cellBase}>{render(h)}</td>)}
+      <td style={sumCell}>{inn}</td>
+      <td style={{ ...sumCell, minWidth: 62, background: "rgba(35,61,107,0.12)" }}>{tot}</td>
+      <td style={{ ...sumCell, minWidth: 62, background: "rgba(35,61,107,0.06)" }}>{net}</td>
+    </tr>
+  );
+  const InputCell = (h) => {
+    const v = arr[h];
+    const st = cm.holeStrokes[h];
+    return (
+      <div style={{ position: "relative", display: "inline-block" }}>
+        {st > 0 && <div style={{ position: "absolute", top: -4, right: -3, display: "flex", gap: 1, zIndex: 2 }}>
+          {Array.from({ length: Math.min(st, 2) }).map((_, i) => <span key={i} style={{ width: 7, height: 7, borderRadius: 999, background: C.navyDeep, boxShadow: "0 0 0 1.5px #fff" }} />)}
+        </div>}
+        <input value={v == null ? "" : v} onChange={(ev) => setScore(ri, m.id, cm.player.id, h, ev.target.value)} onFocus={beginEdit} onBlur={endEdit} inputMode="numeric"
+          style={{ width: 34, textAlign: "center", border: `1px solid rgba(28,37,54,0.22)`, borderRadius: 6, padding: "6px 0", fontSize: 14.5, fontWeight: 600, color: C.ink, background: "#fff", outline: "none" }} />
+      </div>
+    );
+  };
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.line}` }}>
+        <table style={{ borderCollapse: "collapse", background: C.panel, color: C.ink, minWidth: 860 }}>
+          <thead><HoleRow label={<span style={{ color: "#fff", fontWeight: 800 }}>Hole</span>} lstyle={{ background: C.navy, color: "#fff" }} render={(h) => COURSE.holes[h].h} out="OUT" inn="IN" tot="TOT" net="NET" /></thead>
+          <tbody>
+            <HoleRow label="Par" render={(h) => PAR[h]} out={36} inn={36} tot={72} net="" />
+            <HoleRow label={<span style={{ color: C.inkSoft }}>Stroke index</span>} style={{ background: "rgba(178,58,46,0.06)" }} render={(h) => SI[h]} out="" inn="" tot="" net="" />
+            <tr><td colSpan={23} style={{ padding: "5px 10px", fontSize: 10.5, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: "#fff", background: team.color }}>{cm.player.name} · Course HCP {cm.courseHcp} · target {cm.target}</td></tr>
+            <HoleRow label={<span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 999, background: team.color, marginRight: 6 }} />{cm.player.name.split(" ")[0]} <span style={{ color: C.inkSoft }}>({cm.courseHcp})</span></span>}
+              render={(h) => InputCell(h)}
+              out={sum(arr, 0, 9)} inn={sum(arr, 9, 18)}
+              tot={grossTot == null ? "" : <ScoreTotal v={grossTot} par={72} />}
+              net={netTot == null ? "" : <ScoreTotal v={netTot} par={72} />} />
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11, color: C.inkSoft, marginTop: 8, lineHeight: 1.5 }}>
+        <b>Quota match:</b> {cm.player.name} plays solo against his course-adjusted handicap ({cm.courseHcp} from the {round.tee} tees, target gross {cm.target}). If his net total beats par (72), {team.name} wins this match. If over par, {otherTeam.name} wins. Even is halved. Navy dots show holes where {cm.player.name.split(" ")[0]} gets a stroke.
+      </div>
+    </div>
   );
 }
 
@@ -649,10 +850,19 @@ function computeRecords(state) {
   const rec = {};
   const ensure = (id, side) => { if (!rec[id]) { const p = findPlayer(state, id); rec[id] = { id, name: p ? p.name : id, hcp: p ? p.hcp : null, side, played: 0, w: 0, l: 0, h: 0, pts: 0 }; } return rec[id]; };
   state.rounds.forEach((r) => r.matches.forEach((m) => {
-    const cm = computeMatch(state, r, m, "net");
     const pp = r.points || 1;
-    m.a.forEach((id) => { const e = ensure(id, "A"); if (cm.result) { e.played++; if (cm.result === "A") { e.w++; e.pts += pp; } else if (cm.result === "B") { e.l++; } else { e.h++; e.pts += pp / 2; } } });
-    m.b.forEach((id) => { const e = ensure(id, "B"); if (cm.result) { e.played++; if (cm.result === "B") { e.w++; e.pts += pp; } else if (cm.result === "A") { e.l++; } else { e.h++; e.pts += pp / 2; } } });
+    if (m.quota) {
+      const cm = computeQuotaMatch(state, r, m);
+      if (cm.result) {
+        const ids = m.a.length > 0 ? m.a : m.b;
+        const qSide = m.a.length > 0 ? "A" : "B";
+        ids.forEach((id) => { const e = ensure(id, qSide); e.played++; if (cm.result === qSide) { e.w++; e.pts += pp; } else if (cm.result === "H") { e.h++; e.pts += pp / 2; } else { e.l++; } });
+      }
+    } else {
+      const cm = computeMatch(state, r, m, "net");
+      m.a.forEach((id) => { const e = ensure(id, "A"); if (cm.result) { e.played++; if (cm.result === "A") { e.w++; e.pts += pp; } else if (cm.result === "B") { e.l++; } else { e.h++; e.pts += pp / 2; } } });
+      m.b.forEach((id) => { const e = ensure(id, "B"); if (cm.result) { e.played++; if (cm.result === "B") { e.w++; e.pts += pp; } else if (cm.result === "A") { e.l++; } else { e.h++; e.pts += pp / 2; } } });
+    }
   }));
   return rec;
 }
