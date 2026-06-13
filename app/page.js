@@ -210,10 +210,10 @@ function computeQuotaMatch(state, round, m) {
 function computeMatch(state, round, m, basis) {
   const ents = matchEntities(state, round, m);
   const all = [...ents.a, ...ents.b];
-  const useDiff = round.type === "singles" || round.type === "scramble"; // single-ball head-to-head: only the higher side gets strokes
+  const useDiff = round.type === "singles" || round.type === "scramble" || round.type === "bestball"; // higher side gets the difference; lower side plays scratch
   const minPH = useDiff && all.length ? Math.min(...all.map((e) => e.ph)) : 0;
   all.forEach((e) => {
-    e.matchStrokes = useDiff ? Math.max(0, e.ph - minPH) : e.ph; // shamble/best ball: each player keeps their own strokes
+    e.matchStrokes = useDiff ? Math.max(0, e.ph - minPH) : e.ph; // shamble: each player keeps their own strokes
     e.holeStrokes = SI.map((si) => strokesOnHole(e.matchStrokes, si));
     const arr = m.scores?.[e.key] || [];
     e.gross = SI.map((_, h) => (arr[h] == null ? null : arr[h]));
@@ -299,26 +299,74 @@ export default function Page() {
   const revRef = useRef(null), editingRef = useRef(false), mounted = useRef(true);
   const basis = "net"; // gross entry only; net auto-calculated
 
+  const pendingStateRef = useRef(null);
+
   useEffect(() => {
     mounted.current = true;
+    let unsubscribe = null;
     (async () => {
       let s = await store.get(KEY);
-      if (!s) { s = defaultState(); await store.set(KEY, s); }
-      else if (migrate(s)) { s.meta.updatedAt = rev(); await store.set(KEY, s); }
+      if (!s) {
+        s = defaultState();
+        await store.set(KEY, s);
+      } else if (migrate(s)) {
+        // Run migration through a transaction so we don't clobber a concurrent write.
+        const migrated = await store.transact(KEY, (curr) => {
+          const c = curr || s;
+          if (migrate(c)) c.meta.updatedAt = rev();
+          return c;
+        });
+        if (migrated) s = migrated;
+      }
       if (!mounted.current) return;
-      revRef.current = s.meta.updatedAt; setState(s); setSynced(true);
+      revRef.current = s.meta.updatedAt;
+      setState(s);
+      setSynced(true);
+
+      // Real-time subscription: replaces 4s polling. Everyone sees updates instantly,
+      // and writes can't clobber each other because commit() uses transact().
+      unsubscribe = store.subscribe(KEY, (newState) => {
+        if (!newState || !mounted.current) return;
+        const newRev = newState.meta && newState.meta.updatedAt;
+        if (!newRev || newRev === revRef.current) return;
+        if (editingRef.current) {
+          // User is typing -- don't yank their input out from under them.
+          // We stash the update and apply it as soon as they blur.
+          pendingStateRef.current = newState;
+          return;
+        }
+        revRef.current = newRev;
+        setState(newState);
+      });
     })();
-    return () => { mounted.current = false; };
-  }, []);
-  useEffect(() => {
-    const id = setInterval(async () => {
-      if (editingRef.current) return; const s = await store.get(KEY); if (!s || !mounted.current) return;
-      if (s.meta.updatedAt !== revRef.current) { revRef.current = s.meta.updatedAt; setState(s); }
-    }, 4000);
-    return () => clearInterval(id);
+    return () => {
+      mounted.current = false;
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
   const commit = useCallback((updater) => {
-    setState((prev) => { const next = typeof updater === "function" ? updater(prev) : updater; next.meta = { ...next.meta, updatedAt: rev() }; revRef.current = next.meta.updatedAt; store.set(KEY, next); return next; });
+    // 1) Optimistic local update for snappy UI.
+    setState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      next.meta = { ...next.meta, updatedAt: rev() };
+      revRef.current = next.meta.updatedAt;
+      // 2) Atomic transactional write to Firebase. The updater is replayed against
+      // the latest server state, so other peoples concurrent changes are preserved
+      // instead of being clobbered.
+      store.transact(KEY, (current) => {
+        if (!current) return next;
+        const merged = typeof updater === "function" ? updater(current) : updater;
+        merged.meta = { ...merged.meta, updatedAt: rev() };
+        return merged;
+      }).then((result) => {
+        if (!result || !mounted.current) return;
+        if (!result.meta || result.meta.updatedAt === revRef.current) return;
+        if (editingRef.current) { pendingStateRef.current = result; return; }
+        revRef.current = result.meta.updatedAt;
+        setState(result);
+      }).catch((err) => console.error("commit transact error:", err));
+      return next;
+    });
   }, []);
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const t = useMemo(() => (state ? totals(state, basis) : null), [state]);
@@ -326,8 +374,19 @@ export default function Page() {
   if (!state) return <div style={{ minHeight: "100vh", background: C.paper, color: C.ink, display: "grid", placeItems: "center", fontFamily: SANS }}>Loading the board…</div>;
 
   const round = state.rounds[activeRound];
-  const beginEdit = () => (editingRef.current = true);
-  const endEdit = () => (editingRef.current = false);
+  const beginEdit = () => { editingRef.current = true; };
+  const endEdit = () => {
+    editingRef.current = false;
+    // Apply any state update that arrived while the user was typing.
+    if (pendingStateRef.current && mounted.current) {
+      const s = pendingStateRef.current;
+      pendingStateRef.current = null;
+      if (s.meta && s.meta.updatedAt && s.meta.updatedAt !== revRef.current) {
+        revRef.current = s.meta.updatedAt;
+        setState(s);
+      }
+    }
+  };
 
   const setTitle = (v) => commit((p) => { const n = clone(p); n.meta.title = v; return n; });
   const setTeam = (side, patch) => commit((p) => { const n = clone(p); n.teams[side] = { ...n.teams[side], ...patch }; return n; });
@@ -721,7 +780,7 @@ function Scorecard({ state, round, m, ri, basis, cm, setScore, beginEdit, endEdi
         </table>
       </div>
       <div style={{ fontSize: 11, color: C.inkSoft, marginTop: 8, lineHeight: 1.5 }}>
-        Enter <b>gross scores only</b> — net is calculated automatically. Navy dots mark each hole where that player/team gets a stroke. Singles &amp; scramble: only the higher side gets strokes. Shamble (80%) &amp; best ball: every player gets their own strokes. Match row: ▲ = {A.name.split(" ")[0]} up, ▼ = {B.name.split(" ")[0]} up, AS = all square — the front-nine lead is halved at the turn.
+        Enter <b>gross scores only</b> — net is calculated automatically. Navy dots mark each hole where that player/team gets a stroke. Singles, scramble &amp; best ball: only the higher side gets strokes (lowest player in the match plays scratch). Shamble (80%): every player keeps their own strokes. Match row: ▲ = {A.name.split(" ")[0]} up, ▼ = {B.name.split(" ")[0]} up, AS = all square — the front-nine lead is halved at the turn.
       </div>
     </div>
   );
@@ -764,7 +823,7 @@ function CourseView({ state }) {
       </div>
       <SectionLabel>Scorecard</SectionLabel>
       <div style={{ marginTop: 6 }}><Nine holes={out} label="OUT" total={36} /><Nine holes={inn} label="IN" total={36} /></div>
-      <div style={{ fontSize: 11.5, color: C.inkSoft, lineHeight: 1.5 }}>Par 72 · 6,537 yds from the Blue tees. Singles &amp; scramble use the difference method (only the higher side gets strokes, on the hardest holes). Shamble (80% per player) &amp; best ball (full) let each player keep their own strokes, best net ball counts. Scramble team handicap = round(35% of the better + 15% of the worse). Ratings vary by source — confirm with the pro shop before settling bets.</div>
+      <div style={{ fontSize: 11.5, color: C.inkSoft, lineHeight: 1.5 }}>Par 72 · 6,537 yds from the Blue tees. Singles, scramble &amp; best ball use the difference method (only the higher side gets strokes, on the hardest holes — the lowest handicap in the match plays scratch). Shamble (80% per player) lets each player keep their own strokes; best net ball counts in the team formats. Scramble team handicap = round(35% of the better + 15% of the worse). Ratings vary by source — confirm with the pro shop before settling bets.</div>
     </div>
   );
 }
